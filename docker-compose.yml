@@ -1,0 +1,18 @@
+services:
+  akz:
+    build: .
+    image: akz-voyages
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Used only when there is no admin account yet (first start without a backup).
+      ADMIN_LOGIN: admin
+      ADMIN_PASSWORD: ${AKZ_ADMIN_PASSWORD:?set AKZ_ADMIN_PASSWORD in .env}
+      # Behind an HTTPS reverse proxy (Caddy, nginx, Traefik): real client IPs and Secure cookies.
+      TRUST_PROXY: "1"
+    volumes:
+      - akz-data:/data
+
+volumes:
+  akz-data:

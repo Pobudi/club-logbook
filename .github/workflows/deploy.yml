@@ -1,0 +1,65 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# one deploy at a time; a newer push waits instead of cancelling a deploy halfway
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntax check
+        run: |
+          node --check server/server.js
+          node --check server/selfhost.js
+          node --check router-worker.js
+          node -e "new Function(require('fs').readFileSync('app.js','utf8'))"
+
+      - name: Build image
+        run: docker build -t akz-ci .
+
+      - name: Smoke test
+        run: |
+          docker run -d --name akz-ci -p 8080:8080 -e ADMIN_LOGIN=ci -e ADMIN_PASSWORD=ci-password-123 akz-ci
+          for i in $(seq 1 20); do curl -fsS localhost:8080/healthz && break; sleep 1; done
+          curl -fsS localhost:8080/ | grep -q 'selfhost.js'
+          curl -fsS localhost:8080/api/me | grep -q '"admin":false'
+          code=$(curl -s -o /dev/null -w '%{http_code}' 'localhost:8080/api/doc?path=config/admins')
+          test "$code" = 403
+          docker logs akz-ci
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Deploy to VM
+        env:
+          SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VM_KNOWN_HOSTS }}
+          TARGET: ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # the key on the VM is locked to deploy/deploy.sh, so this runs exactly that
+          ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TARGET" "$GITHUB_SHA"
+
+      - name: Check the live site
+        run: |
+          for i in $(seq 1 10); do curl -fsS https://akz.ai4es.xyz/healthz && exit 0; sleep 3; done
+          exit 1

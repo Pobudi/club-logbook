@@ -4,7 +4,7 @@ services:
     image: akz-voyages
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8090:8080"   # only nginx on the VM talks to it
     environment:
       # Used only when there is no admin account yet (first start without a backup).
       ADMIN_LOGIN: admin

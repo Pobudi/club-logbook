@@ -1,0 +1,13 @@
+# build leftovers and local files, not part of the image
+base.geojson
+voyages.json
+maplibre-gl.js
+nginx.conf
+*.tar
+.env
+docker-compose.yml
+Dockerfile
+.dockerignore
+*.md
+.github
+deploy

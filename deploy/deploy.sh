@@ -20,13 +20,25 @@ main() {
   sudo docker compose up -d --build --remove-orphans
   sudo docker image prune -f >/dev/null
 
+  sudo docker compose ps
+  local ok=""
   for _ in $(seq 1 30); do
-    if curl -fsS localhost:8090/healthz >/dev/null; then echo "== healthy"; return 0; fi
+    if curl -fsS localhost:8090/healthz >/dev/null; then ok=1; break; fi
     sleep 2
   done
-  echo "== health check failed"
-  sudo docker compose logs --tail 80
-  return 1
+  if [ -z "$ok" ]; then
+    echo "== app does not answer on localhost:8090"
+    sudo docker compose logs --tail 80
+    return 1
+  fi
+  echo "== app answers on localhost:8090"
+
+  # nginx must forward the domain to that same port (a mismatch shows up as 502)
+  sudo python3 deploy/nginx_akz.py akz.ai4es.xyz 8090
+  local code
+  code=$(curl -s -o /dev/null -w '%{http_code}' --resolve akz.ai4es.xyz:443:127.0.0.1 https://akz.ai4es.xyz/healthz || true)
+  echo "== https://akz.ai4es.xyz/healthz through nginx: $code"
+  [ "$code" = 200 ] && echo "== healthy"
 }
 
 # the whole function is read before git reset can rewrite this file

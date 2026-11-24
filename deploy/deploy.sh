@@ -15,6 +15,12 @@ main() {
   git reset --hard origin/main
   echo "== now at $(git log -1 --format='%h %s')"
 
+  # the pull may have changed this script: continue with the new version
+  if [ "${AKZ_DEPLOY_REEXEC:-}" != 1 ]; then
+    flock -u 9
+    AKZ_DEPLOY_REEXEC=1 exec "$(readlink -f "$0")" "$@"
+  fi
+
   test -f .env || { echo "missing .env (copy .env.example and set AKZ_ADMIN_PASSWORD)"; exit 1; }
 
   sudo docker compose up -d --build --remove-orphans

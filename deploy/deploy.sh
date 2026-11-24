@@ -41,10 +41,18 @@ main() {
 
   # nginx must forward the domain to that same port (a mismatch shows up as 502)
   sudo python3 deploy/nginx_akz.py akz.ai4es.xyz 8090
-  local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --resolve akz.ai4es.xyz:443:127.0.0.1 https://akz.ai4es.xyz/healthz || true)
+  local code=""
+  for _ in $(seq 1 10); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --resolve akz.ai4es.xyz:443:127.0.0.1 https://akz.ai4es.xyz/healthz || true)
+    [ "$code" = 200 ] && break
+    sleep 2
+  done
   echo "== https://akz.ai4es.xyz/healthz through nginx: $code"
-  [ "$code" = 200 ] && echo "== healthy"
+  if [ "$code" != 200 ]; then
+    echo "== nginx error log:"; sudo tail -n 8 /var/log/nginx/error.log || true
+    return 1
+  fi
+  echo "== healthy"
 }
 
 # the whole function is read before git reset can rewrite this file

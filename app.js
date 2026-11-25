@@ -595,7 +595,8 @@ KYVELI	49	209,4	7"></textarea>
       <div id="a-list"></div>
       <h2 class="sec">Konta administratorów</h2>
       <div id="a-acc"></div>
-      ${SELF ? `<h2 class="sec">Kopia zapasowa</h2>
+      ${SELF ? `<h2 class="sec">Miejsce na serwerze</h2><p class="hint2" id="disk" role="status">Sprawdzam…</p>
+      <h2 class="sec">Kopia zapasowa</h2>
       <p class="hint2">Wszystko — wyprawy, układy slajdów, kadry, autorzy i zdjęcia — jest zapisane na serwerze. Pobierz kopię co jakiś czas i trzymaj ją w innym miejscu.</p>
       <div class="row"><a class="btn ghost sm" href="/api/export" download>Pobierz kopię (.tar)</a>
       <label class="btn ghost sm filebtn">Wczytaj kopię z pliku…<input type="file" id="bk-in" accept=".tar,.json,application/x-tar,application/json" hidden></label></div>
@@ -607,6 +608,12 @@ KYVELI	49	209,4	7"></textarea>
       <div class="row"><button type="button" class="btn ghost sm" id="mv-prep">Przygotuj dane</button><button type="button" class="btn sm" id="mv-copy" hidden>Kopiuj do schowka</button></div>
       <p class="hint2" id="mv-s" role="status"></p>`}
     </section>`;
+    if (SELF) window.claude.me().then(m => { const d = m.disk, el = $("#disk"); if (!d || !el) return;
+      const gb = b => (b / 1073741824).toLocaleString("pl", {maximumFractionDigits: 1}) + " GB", mb = b => Math.round(b / 1048576) + " MB";
+      const low = d.free < d.reserve + 1073741824;
+      el.innerHTML = `Wolne ${gb(d.free)} z ${gb(d.total)} · zdjęcia zajmują ${mb(d.photos)}.` +
+        (low ? ` <b class="warn">Zostało mało miejsca — poniżej ${mb(d.reserve)} serwer przestanie przyjmować zdjęcia i zmiany. Zwolnij miejsce na dysku albo go powiększ.</b>` : "");
+    }).catch(() => {});
     const bkSend = async (body, type) => { const st = $("#bk-s"); st.textContent = "Wczytuję kopię…";
       try { const r = await fetch("/api/import", {method: "POST", credentials: "same-origin", headers: {"X-AKZ": "1", "Content-Type": type}, body});
         if (!r.ok) throw new Error(); const j = await r.json(); st.textContent = `Wczytano: ${j.docs} ${plural(j.docs, "wpis", "wpisy", "wpisów")}, ${j.blobs} ${plural(j.blobs, "zdjęcie", "zdjęcia", "zdjęć")}.`; }
@@ -958,7 +965,7 @@ KYVELI	49	209,4	7"></textarea>
   const usedPhotos = V => new Set(Object.values(V.slides || {}).flatMap(s => s.photos || []));
   const pendingFor = (V, key) => { const used = usedPhotos(V); return SUBS.filter(s => s.v === V.id && (!key || s.key === key) && !REJECTED.includes(s.id) && !used.has(s.id)); };
   const shrink = async file => {
-    const bmp = await createImageBitmap(file); const s = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+    let bmp; try { bmp = await createImageBitmap(file); } catch (e) { return file; } const s = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
     const c = document.createElement("canvas"); c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
     c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
     return new Promise(r => c.toBlob(b => r(b || file), "image/jpeg", 0.85));
@@ -984,7 +991,8 @@ KYVELI	49	209,4	7"></textarea>
       const items = [];
       for (let i = 0; i < files.length; i++) { st.textContent = `Wysyłam ${i + 1} z ${files.length}…`; $("#uf-bar i").style.width = (100 * i / files.length) + "%";
         try { const r = await assets.upload(await shrink(files[i])); items.push({id: r.id, v: V.id, key, label, caption: $("#uf-c").value.trim(), author, ts: new Date().toISOString()}); }
-        catch (err) { st.textContent = "Nie udało się wysłać: " + files[i].name; } }
+        catch (err) { st.textContent = err.status === 507 ? "Na serwerze skończyło się miejsce — zdjęcie nie zostało zapisane. Daj znać administratorowi."
+          : err.status === 415 ? "To nie jest zdjęcie JPG, PNG, WebP ani GIF: " + files[i].name : "Nie udało się wysłać: " + files[i].name; } }
       $("#uf-bar i").style.width = "100%";
       if (items.length) { try { const ref = db.doc("submissions/" + uid); const cur0 = await ref.get();
           const prevItems = cur0.exists ? (cur0.data().items || []) : [];

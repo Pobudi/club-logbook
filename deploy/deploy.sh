@@ -53,6 +53,11 @@ main() {
     return 1
   fi
   echo "== healthy"
+  echo "== disk:"; df -h / | tail -1
+  sudo docker system df 2>/dev/null | sed 's/^/   /'
+  local vol; vol=$(sudo docker volume inspect -f '{{.Mountpoint}}' "$(basename "$PWD")_akz-data" 2>/dev/null || true)
+  [ -n "$vol" ] && echo "   site data (photos, voyages): $(sudo du -sh "$vol" | cut -f1)"
+  return 0
 }
 
 # the whole function is read before git reset can rewrite this file

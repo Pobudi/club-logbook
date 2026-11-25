@@ -12,6 +12,7 @@ const TRUST_PROXY = process.env.TRUST_PROXY === "1";
 const MAX_UPLOAD = (+process.env.MAX_UPLOAD_MB || 20) * 1048576;
 const UPLOADS_PER_DAY = +process.env.UPLOADS_PER_DAY || 300;      // per IP, for non-admins
 const SESSION_H = +process.env.SESSION_HOURS || 72;
+const MIN_FREE = (+process.env.MIN_FREE_MB || 500) * 1048576;     // writes are refused below this much free disk
 const DBF = path.join(DATA, "db.json"), BLOBS = path.join(DATA, "blobs"), SNAP = path.join(DATA, "snapshots");
 for (const d of [DATA, BLOBS, SNAP]) fs.mkdirSync(d, {recursive: true});
 
@@ -20,8 +21,16 @@ let DB = {};
 try { DB = JSON.parse(fs.readFileSync(DBF, "utf8")); }
 catch (e) { if (e.code !== "ENOENT") { console.error("db.json is unreadable — refusing to start so nothing gets overwritten:", e.message); process.exit(1); } }
 
+// ---------- disk space: refuse a write rather than lose it ----------
+const diskFree = () => { try { const s = fs.statfsSync(DATA); return {free: s.bavail * s.bsize, total: s.blocks * s.bsize}; } catch (e) { return {free: Infinity, total: 0}; } };
+const roomFor = bytes => diskFree().free - bytes > MIN_FREE;
+const DISK_FULL = Object.assign(new Error("disk_full"), {status: 507});
+const blobBytes = () => fs.readdirSync(BLOBS).reduce((n, f) => { try { return n + fs.statSync(path.join(BLOBS, f)).size; } catch (e) { return n; } }, 0);
+
+// writes are queued; a failed write rejects for its caller (who then reports it) without blocking later ones
 let saving = Promise.resolve();
-const save = () => (saving = saving.then(() => {
+const save = () => { const p = saving.then(() => {
+  if (!roomFor(Buffer.byteLength(JSON.stringify(DB)) * 2)) throw DISK_FULL;
   const tmp = DBF + ".tmp", body = JSON.stringify(DB);
   const fd = fs.openSync(tmp, "w"); fs.writeSync(fd, body); fs.fsyncSync(fd); fs.closeSync(fd);
   fs.renameSync(tmp, DBF);
@@ -29,7 +38,7 @@ const save = () => (saving = saving.then(() => {
   const day = new Date().toISOString().slice(0, 10), snap = path.join(SNAP, `db-${day}.json`);
   if (!fs.existsSync(snap)) { fs.writeFileSync(snap, body);
     fs.readdirSync(SNAP).filter(f => f.startsWith("db-")).sort().slice(0, -30).forEach(f => fs.unlinkSync(path.join(SNAP, f))); }
-}).catch(e => console.error("save failed:", e)));
+}); saving = p.catch(e => console.error("save failed:", e.message)); return p; };
 
 const SEG = /^[^\/\s.][^\/\s]{0,159}$/;
 const validDoc = p => typeof p === "string" && p.split("/").length === 2 && p.split("/").every(s => SEG.test(s));
@@ -105,7 +114,7 @@ const tarEntry = (res, name, buf) => { res.write(tarHeader(name, buf.length)); r
 const exportTar = res => {
   res.writeHead(200, {"Content-Type": "application/x-tar", "Content-Disposition": `attachment; filename="akz-kopia-${new Date().toISOString().slice(0, 10)}.tar"`, "Cache-Control": "no-store"});
   tarEntry(res, "db.json", Buffer.from(JSON.stringify(DB)));
-  for (const f of fs.readdirSync(BLOBS)) tarEntry(res, "blobs/" + f, fs.readFileSync(path.join(BLOBS, f)));
+  for (const f of fs.readdirSync(BLOBS)) if (!f.endsWith(".part")) tarEntry(res, "blobs/" + f, fs.readFileSync(path.join(BLOBS, f)));
   res.end(Buffer.alloc(1024));
 };
 // Merges a backup into the store: its documents replace ones with the same path, photos are added. Nothing else is removed.
@@ -172,7 +181,8 @@ const server = http.createServer(async (req, res) => {
     // state-changing calls must come from the page itself (custom header => no cross-site form posts)
     if (M !== "GET" && req.headers["x-akz"] !== "1") return send(res, 403, {error: "csrf"});
 
-    if (P === "/api/me") return send(res, 200, {admin: c.admin, login: c.login, uid: c.uid, accounts: accounts().length > 0});
+    if (P === "/api/me") return send(res, 200, {admin: c.admin, login: c.login, uid: c.uid, accounts: accounts().length > 0,
+      ...(c.admin ? {disk: {...diskFree(), photos: blobBytes(), reserve: MIN_FREE}} : {})});
     if (P === "/api/events") {
       res.writeHead(200, {"Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no"});
       res.write("retry: 3000\n\n"); clients.add(res); req.on("close", () => clients.delete(res)); return; }
@@ -190,8 +200,12 @@ const server = http.createServer(async (req, res) => {
       if (M === "GET") { if (!canRead(p, c)) return send(res, 403, {error: "permission_denied"}); return send(res, 200, {exists: p in DB, data: DB[p] ?? null}); }
       if (!canWrite(p, c)) return send(res, 403, {error: "permission_denied"});
       if (M === "PUT") { const d = await readJson(req, c.admin ? 2097152 : 262144); if (!d || typeof d !== "object" || Array.isArray(d)) return send(res, 400, {error: "data"});
-        DB[p] = d; await save(); broadcast(p); return send(res, 200, {}); }
-      if (M === "DELETE") { delete DB[p]; await save(); broadcast(p); return send(res, 200, {}); }
+        const had = p in DB, prev = DB[p]; DB[p] = d;
+        try { await save(); } catch (e) { if (had) DB[p] = prev; else delete DB[p]; throw e.status ? e : DISK_FULL; }
+        broadcast(p); return send(res, 200, {}); }
+      if (M === "DELETE") { const prev = DB[p]; delete DB[p];
+        try { await save(); } catch (e) { if (prev !== undefined) DB[p] = prev; throw e.status ? e : DISK_FULL; }
+        broadcast(p); return send(res, 200, {}); }
       return send(res, 405, {error: "method"}); }
     if (P === "/api/col" && M === "GET") { const col = url.searchParams.get("path"); if (!validCol(col)) return send(res, 400, {error: "path"});
       if (!canList(col, c)) return send(res, 403, {error: "permission_denied"});
@@ -199,8 +213,12 @@ const server = http.createServer(async (req, res) => {
 
     if (P === "/api/assets" && M === "POST") {
       if (!c.admin && limited("up:" + c.ip, UPLOADS_PER_DAY, 86400e3)) return send(res, 429, {error: "too_many"});
+      if (!roomFor(+req.headers["content-length"] || MAX_UPLOAD)) throw DISK_FULL;
       const buf = await readBody(req, MAX_UPLOAD), type = imageType(buf); if (!type) return send(res, 415, {error: "not_an_image"});
-      const id = crypto.randomBytes(16).toString("hex"); fs.writeFileSync(path.join(BLOBS, id), buf);
+      if (!roomFor(buf.length)) throw DISK_FULL;
+      const id = crypto.randomBytes(16).toString("hex"), file = path.join(BLOBS, id), tmp = file + ".part";
+      try { const fd = fs.openSync(tmp, "w"); fs.writeSync(fd, buf); fs.fsyncSync(fd); fs.closeSync(fd); fs.renameSync(tmp, file); }
+      catch (e) { fs.rm(tmp, {force: true}, () => {}); console.error("photo not saved:", e.message); throw e.code === "ENOSPC" ? DISK_FULL : e; }
       return send(res, 200, {id, url: "/_blob/" + id, contentType: type, sizeBytes: buf.length}); }
 
     if (P === "/api/export" && M === "GET") { if (!c.admin) return send(res, 403, {error: "permission_denied"}); return exportTar(res); }

@@ -7,7 +7,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const NF = new Intl.NumberFormat("pl", {maximumFractionDigits: 1});
 const fmt = v => NF.format(v);
-const kn = v => new Intl.NumberFormat("pl", {minimumFractionDigits: 1, maximumFractionDigits: 1}).format(v);
+const kn = v => isFinite(v) ? new Intl.NumberFormat("pl", {minimumFractionDigits: 1, maximumFractionDigits: 1}).format(v) : "—";
 const rng = a => { const lo = Math.min(...a), hi = Math.max(...a); return lo === hi ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`; };
 const plural = (n, one, few, many) => n === 1 ? one : (n % 10 >= 2 && n % 10 <= 4 && !(n % 100 >= 12 && n % 100 <= 14)) ? few : many;
 const nRejs = n => `${n} ${plural(n, "rejs", "rejsy", "rejsów")}`;
@@ -122,12 +122,15 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
   };
   const rebuild = () => {
     const vs = [...SEED.map(v => ({...v, seed: true})), ...DBV];
-    VOY = vs.map(v => { const m = META[v.id] || {}; const b = norm(m.override ? {...v, ...m.override} : v);
-      const legs = (b.legs || []).map((L, li) => ({...L, boats: L.boats.map((x, bi) => { const k = li + ":" + bi; return m.crew && k in m.crew ? {...x, crew: m.crew[k]} : x; })}));
+    VOY = vs.map(v => { const m = META[v.id] || {};
+      const fresh = x => !v.seed || !v.rev || (x && x === v.rev);
+      const b = norm(m.override && fresh(m.override.rev) ? {...v, ...m.override, rev: v.rev} : v);
+      const crew = m.crew && fresh(m.crewRev) ? m.crew : null;
+      const legs = (b.legs || []).map((L, li) => ({...L, boats: L.boats.map((x, bi) => { const k = li + ":" + bi; return crew && k in crew ? {...x, crew: crew[k]} : x; })}));
       return {...b, legs, photos: m.photos || {}, cover: m.cover || null, slides: m.slides || {}, credits: m.credits || {}, hidden: !!m.hidden}; })
       .filter(v => !v.hidden && v.legs && v.legs.length);
     VOY.forEach(V => {
-      V.legs.forEach(L => { L.stops = L.routes[0].stops; L.nm = L.boats.reduce((a, b) => a + b.nm, 0); L.h = L.boats.reduce((a, b) => a + b.h, 0);
+      V.legs.forEach(L => { if (!L.routes || !L.routes.length) L.routes = [{stops: [], hops: []}]; L.stops = L.routes[0].stops; L.nm = L.boats.reduce((a, b) => a + b.nm, 0); L.h = L.boats.reduce((a, b) => a + b.h, 0);
         L.crew = L.boats.reduce((a, b) => a + (b.crew || 0), 0); L.crewKnown = L.boats.every(b => b.crew != null); });
       V.totNm = V.legs.reduce((a, L) => a + L.nm, 0); V.totH = V.legs.reduce((a, L) => a + L.h, 0);
       V.crew = V.legs.reduce((a, L) => a + L.crew, 0); V.crewKnown = V.legs.every(L => L.crewKnown);
@@ -147,11 +150,11 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
     {key: "sylwester", name: "Sylwester", re: /sylwest/},
     {key: "wsex", name: "WSEx", full: "Winter Sail Expedition", re: /\bwsex\b|winter sail/},
     {key: "may-i-sail", name: "May I Sail", re: /may i sail/},
-    {key: "nne", name: "NNE", re: /\bnne\b/},
-    {key: "sun-sail-experience", name: "Sun Sail Experience", re: /sun sail/},
+    {key: "nne", name: "NNE", full: "Navigare Necesse Est", re: /\bnne\b|navigare/},
+    {key: "sun-sail-experience", name: "Sun Sail Experience", re: /sun sail|\bssex\b/},
     {key: "znaczy-agh", name: "Znaczy AGH", re: /znaczy agh/},
-    {key: "south-sail-sensation", name: "South Sail Sensation", re: /south sail/},
-    {key: "lange-wochenende", name: "Lange Wochenende", re: /lange wochen/}];
+    {key: "south-sail-sensation", name: "South Sail Sensation", re: /south sail|\bsss\b/},
+    {key: "lange-wochenende", name: "Lange Wochenende", re: /\blange\b/}];
   const seriesOf = V => V.series || (SERIES.find(x => x.re.test(fold(V.title))) || {key: "inne"}).key;
   const seriesList = () => { const out = SERIES.map(x => ({...x, Vs: VOY.filter(v => seriesOf(v) === x.key)}));
     const other = VOY.filter(v => !SERIES.some(x => x.key === seriesOf(v))); if (other.length) out.push({key: "inne", name: "Inne rejsy", Vs: other}); return out; };
@@ -223,7 +226,7 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
         hops.push({from: h.from, to: h.to, v: vi, leg: li, idx: hi, n: R.hops.length, start, end: all.length - 1});
       });
       const lh = hops.filter(h => h.v === vi && h.leg === li);
-      legRange.push({v: vi, leg: li, start: lh[0].start, end: lh[lh.length - 1].end}); }));
+      if (lh.length) legRange.push({v: vi, leg: li, start: lh[0].start, end: lh[lh.length - 1].end}); }));
     const M = all.map(merc), m = [0];
     for (let i = 1; i < M.length; i++) m.push(m[i - 1] + Math.hypot(M[i][0] - M[i - 1][0], M[i][1] - M[i - 1][1]));
     const T = m[m.length - 1] || 1;
@@ -301,7 +304,7 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
   // ---- story ----
   let steps = [], secs = [], cur = -1, io = null, mode = "home";
   const stats = (nm, h, extra = "") => `<div class="big"><div>${nm} Mm<small>mil morskich</small></div><div>${h} h<small>żeglugi</small></div>${extra}</div>`;
-  const route = stops => `${esc(stops[0])} – ${esc(stops[stops.length - 1])}`;
+  const route = stops => !stops.length ? "Trasa nieznana" : stops.length === 1 ? esc(stops[0]) : `${esc(stops[0])} – ${esc(stops[stops.length - 1])}`;
   const nOs = n => `${n} ${plural(n, "osoba", "osoby", "osób")}`;
   const crewTxt = (n, known) => known ? fmt(n) : (n ? fmt(n) + "+" : "—");
   const legDates = L => L.start ? dates(L) : "";
@@ -319,12 +322,16 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
     S.Vs.forEach((V, vi) => {
       let pi = VOY.indexOf(V) * 13; const ph = () => PH(pi++);
       const vh = S.hops.filter(h => h.v === vi), vfirst = vh[0], vlast = vh[vh.length - 1];
+      // voyages or legs without a known route: no track, the map shows their ports (if any) instead
+      const vcam = vfirst ? {from: vfirst.start, to: vlast.end} : {pts: Object.values(V.ports)};
+      const stopPts = L => L.stops.map(p => V.ports[p]).filter(Boolean);
+      let last = vfirst ? vfirst.start : (out.length ? out[out.length - 1].upto : 0);
       out.push({key: "hero", html: `<section class="step hero">${bgImg(V, "hero", slideBg(V, "hero") || coverOf(V, VOY.indexOf(V)))}<div class="over">
         <div class="kick">${multi ? `Wyprawa ${vi + 1} z ${S.Vs.length} · ` : ""}${nRejs(V.legs.length)}${dates(V) ? " · " + dates(V) : ""}</div>
         <h1>${esc(vt(V))}</h1>${V.sub ? `<p class="sub">${esc(V.sub)}</p>` : ""}
         ${stats(fmt(V.totNm), fmt(V.totH), `<div>${V.boatTot.length}<small>${plural(V.boatTot.length, "jacht", "jachty", "jachtów")}</small></div>${V.crew ? `<div>${crewTxt(V.crew, V.crewKnown)}<small>osób w załogach</small></div>` : ""}`)}
         ${fleet(V)}${multi ? "" : `<div class="hint">Przewiń lub naciśnij ↓, aby płynąć</div>`}${tools(V, "hero")}</div></section>`,
-        cam: {from: vfirst.start, to: vlast.end}, upto: vfirst.start, port: null});
+        cam: vcam, upto: last, port: null});
       V.legs.forEach((L, li) => {
         const lr = S.legRange.find(r => r.v === vi && r.leg === li), lh = vh.filter(h => h.leg === li);
         const one = L.boats.length === 1, b0 = L.boats[0];
@@ -332,7 +339,7 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
           <div class="kick">${multi ? esc(vt(V)) + " · " : ""}Rejs ${li + 1} z ${V.legs.length}${legDates(L) ? " · " + legDates(L) : ""}</div><h2>${route(L.stops)}</h2>
           ${stats(fmt(L.nm), fmt(L.h), one ? `<div>${kn(L.nm / L.h)} w<small>średnio</small></div>` : `<div>${L.boats.length}<small>${plural(L.boats.length, "jacht", "jachty", "jachtów")}</small></div>`)}
           <div class="facts"><span class="w">${esc(L.stops.join(" · "))}</span></div>${tools(V, "leg:" + li)}</div></section>`,
-          cam: {from: lr.start, to: lr.end}, upto: lr.start, port: L.stops[0]});
+          cam: lr ? {from: lr.start, to: lr.end} : {pts: stopPts(L)}, upto: lr ? lr.start : last, port: L.stops[0] || null});
         // short page: who sailed this leg
         const vars = L.routes.length > 1;
         const rows = L.boats.map(b => [`${vars ? sw(b.route) : ""}${esc(b.name)}`, b.crew == null ? "—" : fmt(b.crew), fmt(b.h) + " h", fmt(b.nm) + " Mm", kn(b.nm / b.h) + " w"]);
@@ -342,35 +349,37 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
             : table(["Jacht", "Załoga", "Godziny", "Mile", "Średnio"], rows, ["Razem", crewTxt(L.crew, L.crewKnown), fmt(L.h) + " h", fmt(L.nm) + " Mm", kn(L.nm / L.h) + " w"])}
           ${vars ? `<div class="vars"><b>Warianty trasy</b>${L.routes.map((R, i) => `<p>${sw(i)}<span>${esc(R.stops.join(" → "))}<small> · ${nJacht(L.boats.filter(b => b.route === i).length)}</small></span></p>`).join("")}</div>` : ""}
           ${!L.crewKnown ? `<p class="note">Brak danych o liczbie osób — administrator może je uzupełnić.</p>` : ""}${tools(V, "boats:" + li, false)}</section>`,
-          cam: {pts: legPts(L)}, upto: lr.start, port: null, fleet: vars ? [vi, li] : null});
+          cam: {pts: legPts(L).length ? legPts(L) : stopPts(L)}, upto: lr ? lr.start : last, port: null, fleet: vars ? [vi, li] : null});
+        if (lr) last = lr.end;
         lh.forEach(h => out.push({key: `hop:${li}:${h.idx}`, html: `<section class="step"><div class="kick">Rejs ${li + 1} · etap ${h.idx + 1} z ${h.n}</div>
           <h2 class="name">${esc(h.to)}</h2>
           <div class="facts"><b>poprzedni port: ${esc(h.from)}</b>${(V.anchor || []).includes(h.to) ? "<span>na kotwicy</span>" : ""}${country(h.to, V.ports[h.to]) ? `<span>${country(h.to, V.ports[h.to])}</span>` : ""}<span>${pos(V.ports[h.to])}</span></div>${slidePhotos(V, `hop:${li}:${h.idx}`, h.to, ph)}${tools(V, `hop:${li}:${h.idx}`)}</section>`,
           cam: {chase: true}, upto: h.end, port: h.to, fleet: vars ? [vi, li] : null}));
       });
-      const legRows = V.legs.map((L, i) => [`${i + 1}. ${route(L.stops)}${legDates(L) ? `<small class="d">${legDates(L)}</small>` : ""}`, esc(L.boats.map(b => b.name).join(", ")), fmt(L.h) + " h", fmt(L.nm) + " Mm"]);
+      const legRows = V.legs.map((L, i) => [`${i + 1}. ${route(L.stops)}${legDates(L) ? `<small class="d">${legDates(L)}</small>` : ""}`, L.boats.length > 3 ? nJacht(L.boats.length) : esc(L.boats.map(b => b.name).join(", ")), fmt(L.h) + " h", fmt(L.nm) + " Mm"]);
       const boatRows = V.boatTot.map(b => [esc(b.name), nRejs(b.legs), crewTxt(b.crew, b.crewKnown), fmt(b.h) + " h", fmt(b.nm) + " Mm"]);
       out.push({key: "log", html: `<section class="step"><div class="kick">${esc(vt(V))} · dziennik</div><h2 class="name">${fmt(V.totNm)} Mm za rufą</h2>
         ${table(["Rejs", "Jachty", "Godziny", "Mile"], legRows, ["Razem", nJacht(V.boatTot.length), fmt(V.totH) + " h", fmt(V.totNm) + " Mm"])}
         <h3>Jachty</h3>${table(["Jacht", "Rejsy", "Załogi", "Godziny", "Mile"], boatRows, V.boatTot.length > 1 ? ["Razem", "", crewTxt(V.crew, V.crewKnown), fmt(V.totH) + " h", fmt(V.totNm) + " Mm"] : null)}
-        ${slidePhotos(V, "log", vlast.to, ph)}${tools(V, "log")}</section>`,
-        cam: {from: vfirst.start, to: vlast.end}, upto: vlast.end, port: vlast.to});
+        ${slidePhotos(V, "log", vlast ? vlast.to : null, ph)}${tools(V, "log")}</section>`,
+        cam: vcam, upto: vlast ? vlast.end : last, port: vlast ? vlast.to : null});
     });
     if (multi) { const nm = S.Vs.reduce((a, v) => a + v.totNm, 0), h = S.Vs.reduce((a, v) => a + v.totH, 0);
       out.push({html: `<section class="step"><div class="kick">Podsumowanie</div><h2 class="name">${fmt(nm)} Mm pod żaglami</h2>
       ${table(["Wyprawa", "Jachty", "Godziny", "Mile"], S.Vs.map(v => [`${esc(vt(v))} <small class="d">${nRejs(v.legs.length)}</small>`, String(v.boatTot.length), fmt(v.totH) + " h", fmt(v.totNm) + " Mm"]), ["Razem", "", fmt(h) + " h", fmt(nm) + " Mm"])}</section>`,
-      cam: {all: true}, upto: S.all.length - 1, port: null}); }
+      cam: {all: true}, upto: Math.max(0, S.all.length - 1), port: null}); }
     out[out.length - 1].html = out[out.length - 1].html.replace(/<\/section>$/, `<p class="note">Godziny i mile pochodzą z dzienników jachtowych; przy kilku jachtach to suma wszystkich jachtów. Ślad na mapie odtworzono z tras plotera i żeglugi między portami. Tam, gdzie brakuje zdjęć, pokazano grafiki poglądowe.</p>
       <div><button type="button" class="btn ghost" data-home>${mode === "present" ? "Zakończ prezentację" : "← Wszystkie wyprawy"}</button></div></section>`);
     return out;
   };
   const go = i => {
     if (!S || i === cur) return; cur = i; const s = steps[i];
-    const wide = innerWidth > 860, p1 = S.prog(s.upto);
-    if (s.cam.chase) animate(p1, {chase: true, zoom: wide ? 7.3 : 6.4});
+    const wide = innerWidth > 860, track = S.all.length > 1, p1 = track ? S.prog(Math.min(s.upto, S.all.length - 1)) : 0;
+    if (s.cam.chase && track) animate(p1, {chase: true, zoom: wide ? 7.3 : 6.4});
     else { const pts = s.cam.pts || (s.cam.all ? S.all : S.all.slice(s.cam.from, s.cam.to + 1));
-      const c = map.cameraForBounds(bounds(pts), {padding: wide ? 70 : 36});
-      animate(p1, {center: c.center.toArray ? c.center.toArray() : [c.center.lng, c.center.lat], zoom: Math.min(8.6, c.zoom)}); }
+      if (pts.length) { const c = map.cameraForBounds(bounds(pts), {padding: wide ? 70 : 36});
+        const cam = {center: c.center.toArray ? c.center.toArray() : [c.center.lng, c.center.lat], zoom: Math.min(pts.length > 1 ? 8.6 : 7, c.zoom)};
+        if (track) animate(p1, cam); else map.easeTo({...cam, duration: reduce ? 0 : 1200}); } }
     Object.entries(labels).forEach(([p, el]) => el.classList.toggle("on", p === s.port));
     map.getSource("fleet").setData(s.fleet ? legFleet(S.Vs[s.fleet[0]].legs[s.fleet[1]]) : empty);
     if (mode === "present") { const ov = !!s.overview;
@@ -454,10 +463,10 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
     homebtn.textContent = present ? "Zakończ prezentację" : "← " + (g ? g.name : "Wszystkie edycje"); homebtn.dataset.to = present || !g ? "" : "edycja-" + g.key;
     S = flatten(Vs); steps = build(S);
     stepsEl.innerHTML = steps.map(s => s.html).join(""); secs = [...stepsEl.querySelectorAll(".step")]; secs.forEach((el, i) => { if (steps[i].key) el.dataset.key = steps[i].key; });
-    map.getSource("wake").setData({type: "Feature", geometry: {type: "LineString", coordinates: S.all}});
+    map.getSource("wake").setData(S.all.length > 1 ? {type: "Feature", geometry: {type: "LineString", coordinates: S.all}} : empty);
     map.getSource("plan").setData({type: "FeatureCollection", features: parts(S).map(c => ({type: "Feature", geometry: {type: "LineString", coordinates: c}}))});
     map.getSource("others").setData(present ? empty : othersData(VOY.filter(v => !Vs.includes(v))));
-    setPorts(portsOf(Vs), anchorsOf(Vs)); boat.addTo(map); paint(0); scrollTo(0, 0);
+    setPorts(portsOf(Vs), anchorsOf(Vs)); if (S.all.length > 1) { boat.addTo(map); paint(0); } scrollTo(0, 0);
     io = new IntersectionObserver(es => { if (lock) return; es.forEach(e => { if (e.isIntersecting) go(secs.indexOf(e.target)); }); }, {rootMargin: "-58% 0px -40% 0px"});
     secs.forEach(s => io.observe(s)); go(0);
   };
@@ -866,7 +875,7 @@ KYVELI	49	209,4	7"></textarea>
       const st2 = document.querySelector(`.aitem[data-id="${CSS.escape(V.id)}"] .apanel [role=status]`); if (st2) st2.textContent = paneMsg; };
     pane.querySelector("[data-a=crew]").addEventListener("click", () => run(async () => {
       const crew = {}; pane.querySelectorAll("[data-crew]").forEach(i => { const v = i.value.trim(); if (v !== "") crew[i.dataset.crew] = Math.max(0, Math.round(+v)); });
-      await metaSet(V.id, {crew});
+      await metaSet(V.id, {crew, crewRev: V.rev || null});
     }, "Zapisano załogi."));
     const rb = pane.querySelector("[data-a=hide]"); if (rb) rb.addEventListener("click", () => run(() => metaSet(V.id, {hidden: false}), "Przywrócono."));
     wireDanger(pane, V, voyageActs(V, () => { paneMsg = "Gotowe."; }));
@@ -995,7 +1004,7 @@ KYVELI	49	209,4	7"></textarea>
     const body = {...doc, start: st[0] || null, end: en[en.length - 1] || null, legs: packLegs(doc.legs)};
     if (JSON.stringify(body).length > 240000) throw new Error("za duże");
     const m = {...(META[V.id] || {})}; const hadCrew = !!m.crew; delete m.crew;
-    if (V.seed) { m.override = body; await db.doc("meta/" + V.id).set(m); }
+    if (V.seed) { m.override = {...body, rev: V.rev || null}; await db.doc("meta/" + V.id).set(m); }
     else { await db.doc("voyages/" + V.id).set({...body, created: V.created || new Date().toISOString()}); if (hadCrew) await db.doc("meta/" + V.id).set(m); }
     META[V.id] = m; if (!V.seed) { const i = DBV.findIndex(x => x.id === V.id); if (i >= 0) DBV[i] = {id: V.id, ...body}; }
     rebuild();

@@ -11,6 +11,9 @@ services:
       ADMIN_PASSWORD: ${AKZ_ADMIN_PASSWORD:?set AKZ_ADMIN_PASSWORD in .env}
       # Behind an HTTPS reverse proxy (Caddy, nginx, Traefik): real client IPs and Secure cookies.
       TRUST_PROXY: "1"
+      # Off-site backup of every photo and the data file to a private GitHub repo (optional, see README).
+      GITHUB_BACKUP_REPO: ${GITHUB_BACKUP_REPO:-}
+      GITHUB_BACKUP_TOKEN: ${GITHUB_BACKUP_TOKEN:-}
     volumes:
       - akz-data:/data
 

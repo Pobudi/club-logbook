@@ -21,6 +21,8 @@ let DB = {};
 try { DB = JSON.parse(fs.readFileSync(DBF, "utf8")); }
 catch (e) { if (e.code !== "ENOENT") { console.error("db.json is unreadable — refusing to start so nothing gets overwritten:", e.message); process.exit(1); } }
 
+const backup = require("./github-backup.js")({DATA, BLOBS, DBF});
+
 // ---------- disk space: refuse a write rather than lose it ----------
 const diskFree = () => { try { const s = fs.statfsSync(DATA); return {free: s.bavail * s.bsize, total: s.blocks * s.bsize}; } catch (e) { return {free: Infinity, total: 0}; } };
 const roomFor = bytes => diskFree().free - bytes > MIN_FREE;
@@ -38,7 +40,7 @@ const save = () => { const p = saving.then(() => {
   const day = new Date().toISOString().slice(0, 10), snap = path.join(SNAP, `db-${day}.json`);
   if (!fs.existsSync(snap)) { fs.writeFileSync(snap, body);
     fs.readdirSync(SNAP).filter(f => f.startsWith("db-")).sort().slice(0, -30).forEach(f => fs.unlinkSync(path.join(SNAP, f))); }
-}); saving = p.catch(e => console.error("save failed:", e.message)); return p; };
+}); saving = p.catch(e => console.error("save failed:", e.message)); p.then(() => backup.data(), () => {}); return p; };
 
 const SEG = /^[^\/\s.][^\/\s]{0,159}$/;
 const validDoc = p => typeof p === "string" && p.split("/").length === 2 && p.split("/").every(s => SEG.test(s));
@@ -129,7 +131,7 @@ const importTar = file => {
       if (type === "0" || type === "\0") {
         const buf = Buffer.alloc(len); fs.readSync(fd, buf, 0, len, pos + 512);
         if (clean === "db.json") db = JSON.parse(buf.toString("utf8"));
-        else { const m = /^blobs\/([a-f0-9]{32})$/.exec(clean); if (m && imageType(buf)) { fs.writeFileSync(path.join(BLOBS, m[1]), buf); blobs++; } }
+        else { const m = /^blobs\/([a-f0-9]{32})$/.exec(clean); if (m && imageType(buf)) { fs.writeFileSync(path.join(BLOBS, m[1]), buf); blobs++; backup.photo(m[1]); } }
       }
       pos += 512 + Math.ceil(len / 512) * 512;
     }
@@ -140,7 +142,7 @@ const importTar = file => {
 // the same, from the JSON the claude.ai version copies to the clipboard: {format:"akz-backup", docs:{path:data}, blobs:{id:base64}}
 const importJson = obj => { if (!obj || obj.format !== "akz-backup") throw Object.assign(new Error("not a backup"), {status: 400});
   let docs = 0, blobs = 0;
-  for (const [id, b] of Object.entries(obj.blobs || {})) { const buf = Buffer.from(String(b), "base64"); if (/^[a-f0-9]{32}$/.test(id) && imageType(buf)) { fs.writeFileSync(path.join(BLOBS, id), buf); blobs++; } }
+  for (const [id, b] of Object.entries(obj.blobs || {})) { const buf = Buffer.from(String(b), "base64"); if (/^[a-f0-9]{32}$/.test(id) && imageType(buf)) { fs.writeFileSync(path.join(BLOBS, id), buf); blobs++; backup.photo(id); } }
   for (const [k, v] of Object.entries(obj.docs || {})) if (validDoc(k) && !k.startsWith("config/") && v && typeof v === "object") { DB[k] = v; docs++; }
   save(); broadcast("*"); return {docs, blobs}; };
 // first start: load a backup if the store is empty
@@ -182,7 +184,7 @@ const server = http.createServer(async (req, res) => {
     if (M !== "GET" && req.headers["x-akz"] !== "1") return send(res, 403, {error: "csrf"});
 
     if (P === "/api/me") return send(res, 200, {admin: c.admin, login: c.login, uid: c.uid, accounts: accounts().length > 0,
-      ...(c.admin ? {disk: {...diskFree(), photos: blobBytes(), reserve: MIN_FREE}} : {})});
+      ...(c.admin ? {disk: {...diskFree(), photos: blobBytes(), reserve: MIN_FREE}, backup: backup.status} : {})});
     if (P === "/api/events") {
       res.writeHead(200, {"Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no"});
       res.write("retry: 3000\n\n"); clients.add(res); req.on("close", () => clients.delete(res)); return; }
@@ -219,6 +221,7 @@ const server = http.createServer(async (req, res) => {
       const id = crypto.randomBytes(16).toString("hex"), file = path.join(BLOBS, id), tmp = file + ".part";
       try { const fd = fs.openSync(tmp, "w"); fs.writeSync(fd, buf); fs.fsyncSync(fd); fs.closeSync(fd); fs.renameSync(tmp, file); }
       catch (e) { fs.rm(tmp, {force: true}, () => {}); console.error("photo not saved:", e.message); throw e.code === "ENOSPC" ? DISK_FULL : e; }
+      backup.photo(id);
       return send(res, 200, {id, url: "/_blob/" + id, contentType: type, sizeBytes: buf.length}); }
 
     if (P === "/api/export" && M === "GET") { if (!c.admin) return send(res, 403, {error: "permission_denied"}); return exportTar(res); }

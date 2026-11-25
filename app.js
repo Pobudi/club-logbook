@@ -612,6 +612,9 @@ KYVELI	49	209,4	7"></textarea>
       const gb = b => (b / 1073741824).toLocaleString("pl", {maximumFractionDigits: 1}) + " GB", mb = b => Math.round(b / 1048576) + " MB";
       const low = d.free < d.reserve + 1073741824;
       el.innerHTML = `Wolne ${gb(d.free)} z ${gb(d.total)} · zdjęcia zajmują ${mb(d.photos)}.` +
+        (m.backup && m.backup.enabled ? `<br>Kopia na GitHubie (${esc(m.backup.repo)}): ${m.backup.photos} ${plural(m.backup.photos, "zdjęcie", "zdjęcia", "zdjęć")}` +
+          (m.backup.queued ? `, ${m.backup.queued} w kolejce` : "") + (m.backup.lastError ? ` · <b class="warn">ostatnia próba nieudana: ${esc(m.backup.lastError)}</b>` : m.backup.lastOk ? ` · ostatnio ${new Date(m.backup.lastOk).toLocaleString("pl")}` : "")
+          : "<br>Kopia na GitHubie: wyłączona.") +
         (low ? ` <b class="warn">Zostało mało miejsca — poniżej ${mb(d.reserve)} serwer przestanie przyjmować zdjęcia i zmiany. Zwolnij miejsce na dysku albo go powiększ.</b>` : "");
     }).catch(() => {});
     const bkSend = async (body, type) => { const st = $("#bk-s"); st.textContent = "Wczytuję kopię…";

@@ -3,7 +3,7 @@
 FROM node:22-alpine
 
 WORKDIR /app
-COPY server/server.js /app/server.js
+COPY server/server.js server/github-backup.js /app/
 COPY index.html app.js router-worker.js voyages.js base.js gaz.js \
      maplibre-gl-csp.js maplibre-gl-csp-worker.js maplibre-gl.css /app/public/
 COPY photos/ /app/public/photos/

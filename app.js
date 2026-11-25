@@ -287,7 +287,18 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
   const credit = (V, id) => id && (V.credits || {})[id] ? String(V.credits[id]) : "";
   const imgTag = (V, key, src, cls, extra = "") => { const id = pidOf(src), p = id ? (((V.slides || {})[key] || {}).pos || {})[id] : null;
     return `<img ${cls}src="${src}"${id ? ` data-pid="${esc(id)}" data-credit="${esc(credit(V, id))}"` : ""} style="${frameCss(p)}" alt=""${extra}>`; };
+  // ---- photo boards: photos placed freely on a slide. x, y, w are fractions of the board width, h = height / width ----
+  let CANVAS = {}, OPEN_UNTIL = null, boardEditing = null;
+  const openNow = () => !!OPEN_UNTIL && Date.parse(OPEN_UNTIL) > Date.now();
+  const canArrange = () => editOn() || (SELF && openNow());
+  const boardId = (V, key) => V.id + "__" + key.replace(/:/g, "-");
+  const boardOf = (V, key) => CANVAS[boardId(V, key)];
+  const itemCss = (it, h) => `left:${it.x * 100}%;top:${it.y / h * 100}%;width:${it.w * 100}%;height:${it.w * it.ar / h * 100}%;z-index:${(it.z || 0) + 10}${it.rot ? `;transform:rotate(${it.rot}deg)` : ""}`;
+  const boardHtml = (V, key) => { const b = boardOf(V, key); if (!b || !b.items || !b.items.length) return "";
+    return `<div class="board" style="aspect-ratio:1/${b.h}">${[...b.items].sort((a, c) => (a.z || 0) - (c.z || 0)).map(it =>
+      `<button type="button" class="bi" style="${itemCss(it, b.h)}" aria-label="Powiększ zdjęcie"><img loading="lazy" src="/_blob/${esc(it.id)}" alt="" data-credit="${esc(it.author || "")}">${it.author ? `<span class="bcr">fot. ${esc(it.author)}</span>` : ""}</button>`).join("")}</div>`; };
   const slidePhotos = (V, key, stop, ph) => {
+    const bd = boardHtml(V, key); if (bd) return bd;
     const cfg = (V.slides || {})[key]; if (cfg && cfg.layout === "none") return "";
     let list = cfg && cfg.photos && cfg.photos.length ? cfg.photos.map(id => "/_blob/" + id) : [];
     if (!list.length && stop) list = realPhotos(V, stop).slice(0, 7);
@@ -299,7 +310,9 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
   // full-bleed background of hero/leg slides, with the author in the corner
   const bgImg = (V, key, src, lazy) => { const by = credit(V, pidOf(src));
     return imgTag(V, key, src, lazy ? 'loading="lazy" class="bg" ' : 'class="bg" ') + (by ? `<span class="credit">fot. ${esc(by)}</span>` : ""); };
-  const tools = (V, key, upload = true) => mode === "present" ? "" : `<div class="stools">${upload ? `<button type="button" class="tbtn" data-up="${esc(V.id)}|${key}">Dodaj zdjęcia</button>` : ""}${editOn() ? `<button type="button" class="tbtn ed" data-ed="${esc(V.id)}|${key}">Edytuj</button>${upload ? `<button type="button" class="tbtn ed" data-crop="${esc(V.id)}|${key}">Kadruj zdjęcia</button>` : ""}` : ""}</div>`;
+  const tools = (V, key, upload = true) => mode === "present" ? "" : `<div class="stools">${upload && !editOn() && canArrange()
+      ? `<button type="button" class="tbtn open" data-board="${esc(V.id)}|${key}">Dodaj i ułóż zdjęcia</button>`
+      : upload ? `<button type="button" class="tbtn" data-up="${esc(V.id)}|${key}">Dodaj zdjęcia</button>` : ""}${upload && editOn() ? `<button type="button" class="tbtn ed" data-board="${esc(V.id)}|${key}">Układaj zdjęcia</button>` : ""}${editOn() ? `<button type="button" class="tbtn ed" data-ed="${esc(V.id)}|${key}">Edytuj</button>${upload ? `<button type="button" class="tbtn ed" data-crop="${esc(V.id)}|${key}">Kadruj zdjęcia</button>` : ""}` : ""}</div>`;
 
   // ---- story ----
   let steps = [], secs = [], cur = -1, io = null, mode = "home";
@@ -330,7 +343,7 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
         <div class="kick">${multi ? `Wyprawa ${vi + 1} z ${S.Vs.length} · ` : ""}${nRejs(V.legs.length)}${dates(V) ? " · " + dates(V) : ""}</div>
         <h1>${esc(vt(V))}</h1>${V.sub ? `<p class="sub">${esc(V.sub)}</p>` : ""}
         ${stats(fmt(V.totNm), fmt(V.totH), `<div>${V.boatTot.length}<small>${plural(V.boatTot.length, "jacht", "jachty", "jachtów")}</small></div>${V.crew ? `<div>${crewTxt(V.crew, V.crewKnown)}<small>osób w załogach</small></div>` : ""}`)}
-        ${fleet(V)}${multi ? "" : `<div class="hint">Przewiń lub naciśnij ↓, aby płynąć</div>`}${tools(V, "hero")}</div></section>`,
+        ${fleet(V)}${multi ? "" : `<div class="hint">Przewiń lub naciśnij ↓, aby płynąć</div>`}${boardHtml(V, "hero")}${tools(V, "hero")}</div></section>`,
         cam: vcam, upto: last, port: null});
       V.legs.forEach((L, li) => {
         const lr = S.legRange.find(r => r.v === vi && r.leg === li), lh = vh.filter(h => h.leg === li);
@@ -338,7 +351,7 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
         out.push({key: "leg:" + li, html: `<section class="step leg">${bgImg(V, "leg:" + li, slideBg(V, "leg:" + li) || realPhotos(V, L.stops[0])[0] || ph(), true)}<div class="over">
           <div class="kick">${multi ? esc(vt(V)) + " · " : ""}Rejs ${li + 1} z ${V.legs.length}${legDates(L) ? " · " + legDates(L) : ""}</div><h2>${route(L.stops)}</h2>
           ${stats(fmt(L.nm), fmt(L.h), one ? `<div>${kn(L.nm / L.h)} w<small>średnio</small></div>` : `<div>${L.boats.length}<small>${plural(L.boats.length, "jacht", "jachty", "jachtów")}</small></div>`)}
-          <div class="facts"><span class="w">${esc(L.stops.join(" · "))}</span></div>${tools(V, "leg:" + li)}</div></section>`,
+          <div class="facts"><span class="w">${esc(L.stops.join(" · "))}</span></div>${boardHtml(V, "leg:" + li)}${tools(V, "leg:" + li)}</div></section>`,
           cam: lr ? {from: lr.start, to: lr.end} : {pts: stopPts(L)}, upto: lr ? lr.start : last, port: L.stops[0] || null});
         // short page: who sailed this leg
         const vars = L.routes.length > 1;
@@ -534,7 +547,7 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
   };
   stepsEl.addEventListener("click", e => {
     if (e.target.closest("[data-home]")) { location.hash = ""; return; }
-    const b = e.target.closest(".ph button"); if (!b || b.closest(".cropping")) return;
+    const b = e.target.closest(".ph button, .board .bi"); if (!b || b.closest(".cropping")) return;
     const im = b.querySelector("img"); lbi.src = im.src; $("#lbc").textContent = im.dataset.credit ? "fot. " + im.dataset.credit : "";
     lb.classList.add("open"); $("#lbx").focus();
   });
@@ -595,7 +608,10 @@ KYVELI	49	209,4	7"></textarea>
       <div id="a-list"></div>
       <h2 class="sec">Konta administratorów</h2>
       <div id="a-acc"></div>
-      ${SELF ? `<h2 class="sec">Miejsce na serwerze</h2><p class="hint2" id="disk" role="status">Sprawdzam…</p>
+      ${SELF ? `<h2 class="sec">Tryb otwarty</h2><p class="hint2" id="op-s" role="status"></p>
+      <div class="row"><button type="button" class="btn ghost sm" data-op="24">Włącz na 24 h</button><button type="button" class="btn ghost sm" data-op="72">Na 3 dni</button>
+      <button type="button" class="btn ghost sm" data-op="168">Na tydzień</button><button type="button" class="btn ghost sm" data-op="0">Wyłącz</button></div>
+      <h2 class="sec">Miejsce na serwerze</h2><p class="hint2" id="disk" role="status">Sprawdzam…</p>
       <h2 class="sec">Kopia zapasowa</h2>
       <p class="hint2">Wszystko — wyprawy, układy slajdów, kadry, autorzy i zdjęcia — jest zapisane na serwerze. Pobierz kopię co jakiś czas i trzymaj ją w innym miejscu.</p>
       <div class="row"><a class="btn ghost sm" href="/api/export" download>Pobierz kopię (.tar)</a>
@@ -608,6 +624,10 @@ KYVELI	49	209,4	7"></textarea>
       <div class="row"><button type="button" class="btn ghost sm" id="mv-prep">Przygotuj dane</button><button type="button" class="btn sm" id="mv-copy" hidden>Kopiuj do schowka</button></div>
       <p class="hint2" id="mv-s" role="status"></p>`}
     </section>`;
+    renderOpen();
+    document.querySelectorAll("[data-op]").forEach(b => b.addEventListener("click", async () => { const h = +b.dataset.op;
+      try { await db.doc("site/open").set({until: h ? new Date(Date.now() + h * 3600e3).toISOString() : null, by: adminLogin || null}); OPEN_UNTIL = h ? new Date(Date.now() + h * 3600e3).toISOString() : null; renderOpen(); }
+      catch (e) { $("#op-s").textContent = "Nie udało się zmienić — spróbuj ponownie."; } }));
     if (SELF) window.claude.me().then(m => { const d = m.disk, el = $("#disk"); if (!d || !el) return;
       const gb = b => (b / 1073741824).toLocaleString("pl", {maximumFractionDigits: 1}) + " GB", mb = b => Math.round(b / 1048576) + " MB";
       const low = d.free < d.reserve + 1073741824;
@@ -1147,7 +1167,111 @@ KYVELI	49	209,4	7"></textarea>
     if (te) openTextEditor(te.dataset.te);
     const cr = e.target.closest("[data-crop]");
     if (cr) { const [vid, key] = cr.dataset.crop.split("|"); const V = VOY.find(v => v.id === vid); if (V) startCrop(V, key, cr.closest("section")); }
+    const bo = e.target.closest("[data-board]");
+    if (bo) { const [vid, key] = bo.dataset.board.split("|"); const V = VOY.find(v => v.id === vid); if (V) openBoard(V, key); }
   });
+
+  // ---- board editor: a full-screen sheet, the same board scaled up; changes save themselves ----
+  const openBoard = (V, key) => {
+    if (boardEditing || !db) return;
+    const id = boardId(V, key), cur = boardOf(V, key);
+    const B = {h: cur ? cur.h : 0.75, items: cur ? JSON.parse(JSON.stringify(cur.items || [])) : []};
+    boardEditing = id;
+    const el = document.createElement("div"); el.className = "bed"; el.setAttribute("role", "dialog"); el.setAttribute("aria-modal", "true"); el.setAttribute("aria-label", "Układanie zdjęć");
+    el.innerHTML = `<div class="bed-bar">
+        <div class="bed-t"><b>Układanie zdjęć</b><span>${esc(vt(V))} · ${esc(keyLabel(V, key))}</span></div>
+        <label class="btn sm filebtn">Dodaj zdjęcia<input type="file" accept="image/*" multiple hidden id="bed-f"></label>
+        <input id="bed-a" placeholder="Autor zdjęć (opcjonalnie)" maxlength="80" aria-label="Autor dodawanych zdjęć">
+        <span class="bed-sel" hidden><button type="button" data-a="front">Na wierzch</button><button type="button" data-a="back">Na spód</button>
+          <button type="button" data-a="l" aria-label="Obróć w lewo">↺</button><button type="button" data-a="r" aria-label="Obróć w prawo">↻</button>
+          <button type="button" data-a="del" class="del">Usuń</button></span>
+        <span id="bed-s" class="hint2" role="status"></span>
+        <button type="button" class="btn sm" id="bed-x">Gotowe</button></div>
+      <div class="bed-scroll"><div class="bed-board" id="bed-b"></div>
+        <div class="bed-grow" role="slider" tabindex="0" aria-label="Wysokość tablicy">⇕ przeciągnij, aby wydłużyć lub skrócić tablicę</div>
+        <p class="bed-help">Przeciągnij zdjęcie, aby je przesunąć; uchwyt w prawym dolnym rogu zmienia rozmiar. Strzałki przesuwają, Delete usuwa.
+        ${editOn() ? "Zmiany zapisują się same." : "Zmiany zapisują się same i od razu widzą je wszyscy."}</p></div>`;
+    document.body.appendChild(el); document.body.classList.add("bed-open");
+    const board = el.querySelector("#bed-b"), st = el.querySelector("#bed-s"), selBar = el.querySelector(".bed-sel");
+    try { el.querySelector("#bed-a").value = localStorage.getItem("akz-author") || ""; } catch (e) {}
+    let sel = null, drag = null, saveT = null, saving = Promise.resolve();
+    const W = () => board.clientWidth;
+    const minH = () => Math.max(0.3, ...B.items.map(it => it.y + it.w * it.ar));
+    const draw = () => {
+      board.style.height = W() * B.h + "px";
+      board.innerHTML = B.items.length ? [...B.items].sort((a, c) => (a.z || 0) - (c.z || 0)).map(it =>
+        `<div class="bit${it.id === sel ? " sel" : ""}" data-id="${esc(it.id)}" style="${itemCss(it, B.h)}" tabindex="0" aria-label="Zdjęcie${it.author ? ", autor " + esc(it.author) : ""}">
+          <img src="/_blob/${esc(it.id)}" alt="" draggable="false">${it.author ? `<span class="bcr">fot. ${esc(it.author)}</span>` : ""}<span class="rz" aria-hidden="true"></span></div>`).join("")
+        : `<p class="bed-empty">Tablica jest pusta. Dodaj zdjęcia przyciskiem u góry — potem przeciągnij je, gdzie chcesz.</p>`;
+      selBar.hidden = !sel;
+    };
+    // changes are written 0.7 s after the last edit; closing writes a pending change immediately
+    const flush = () => { clearTimeout(saveT); saveT = null; saving = saving.then(async () => {
+        try { await db.doc("canvas/" + id).set({h: Math.round(B.h * 1000) / 1000, items: B.items.map(it => ({...it, x: +it.x.toFixed(4), y: +it.y.toFixed(4), w: +it.w.toFixed(4)})), updated: new Date().toISOString(), by: uid || null});
+          CANVAS[id] = {h: B.h, items: JSON.parse(JSON.stringify(B.items))}; st.textContent = "Zapisano"; }
+        catch (e) { st.textContent = e.status === 403 ? "Tryb otwarty się skończył — zmiany nie zostały zapisane." : e.status === 507 ? "Na serwerze skończyło się miejsce — nie zapisano." : "Nie udało się zapisać — spróbuj jeszcze raz."; }
+      }); return saving; };
+    const save = () => { clearTimeout(saveT); st.textContent = "Zapisuję…"; saveT = setTimeout(flush, 700); };
+    const item = idv => B.items.find(it => it.id === idv);
+    const select = idv => { sel = idv; board.querySelectorAll(".bit").forEach(n => n.classList.toggle("sel", n.dataset.id === idv)); selBar.hidden = !sel; };
+    board.addEventListener("pointerdown", e => {
+      const n = e.target.closest(".bit"); if (!n) { select(null); return; }
+      e.preventDefault(); select(n.dataset.id); n.focus({preventScroll: true});
+      const it = item(n.dataset.id); n.setPointerCapture(e.pointerId);
+      drag = {n, it, mode: e.target.classList.contains("rz") ? "size" : "move", x: e.clientX, y: e.clientY, o: {...it}};
+    });
+    board.addEventListener("pointermove", e => { if (!drag) return; const {n, it, o} = drag, dx = (e.clientX - drag.x) / W(), dy = (e.clientY - drag.y) / W();
+      if (drag.mode === "move") { it.x = Math.min(1 - it.w * 0.25, Math.max(-it.w * 0.75, o.x + dx)); it.y = Math.max(0, o.y + dy); }
+      else it.w = Math.min(1.2, Math.max(0.06, o.w + dx));
+      if (it.y + it.w * it.ar > B.h) { B.h = it.y + it.w * it.ar + 0.02; board.style.height = W() * B.h + "px"; board.querySelectorAll(".bit").forEach(m => { m.style.cssText = itemCss(item(m.dataset.id), B.h); }); }
+      else n.style.cssText = itemCss(it, B.h); });
+    const end = () => { if (drag) { drag = null; save(); } };
+    board.addEventListener("pointerup", end); board.addEventListener("pointercancel", end);
+    // stretch the board
+    const grow = el.querySelector(".bed-grow"); let gd = null;
+    grow.addEventListener("pointerdown", e => { e.preventDefault(); grow.setPointerCapture(e.pointerId); gd = {y: e.clientY, h: B.h}; });
+    grow.addEventListener("pointermove", e => { if (!gd) return; B.h = Math.min(6, Math.max(minH(), gd.h + (e.clientY - gd.y) / W())); board.style.height = W() * B.h + "px";
+      board.querySelectorAll(".bit").forEach(m => { m.style.cssText = itemCss(item(m.dataset.id), B.h); }); });
+    grow.addEventListener("pointerup", () => { if (gd) { gd = null; save(); } });
+    grow.addEventListener("keydown", e => { if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return; e.preventDefault(); B.h = Math.min(6, Math.max(minH(), B.h + (e.key === "ArrowDown" ? 0.1 : -0.1))); draw(); save(); });
+    // selected photo: order, rotation, removal
+    selBar.addEventListener("click", e => { const a = e.target.dataset.a, it = item(sel); if (!a || !it) return;
+      const zs = B.items.map(x => x.z || 0);
+      if (a === "front") it.z = Math.max(...zs) + 1; if (a === "back") it.z = Math.min(...zs) - 1;
+      if (a === "l" || a === "r") it.rot = ((it.rot || 0) + (a === "l" ? -5 : 5)) % 360;
+      if (a === "del") { B.items = B.items.filter(x => x !== it); sel = null; }
+      draw(); save(); });
+    const keys = e => { if (e.key === "Escape") { close(); return; }
+      const it = item(sel); if (!it || e.target.tagName === "INPUT") return;
+      const d = e.shiftKey ? 0.05 : 0.01, mv = {ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, -d], ArrowDown: [0, d]}[e.key];
+      if (mv) { e.preventDefault(); it.x = Math.min(1 - it.w * 0.25, Math.max(-it.w * 0.75, it.x + mv[0])); it.y = Math.max(0, it.y + mv[1]); B.h = Math.max(B.h, it.y + it.w * it.ar); draw(); save(); }
+      if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); B.items = B.items.filter(x => x !== it); sel = null; draw(); save(); } };
+    document.addEventListener("keydown", keys);
+    // add photos: they land in a cascade where the board is currently scrolled to
+    el.querySelector("#bed-f").addEventListener("change", async e => {
+      const files = [...e.target.files], author = el.querySelector("#bed-a").value.trim(); e.target.value = "";
+      try { localStorage.setItem("akz-author", author); } catch (x) {}
+      const top = Math.max(0, (el.querySelector(".bed-scroll").scrollTop - board.offsetTop) / W());
+      let k = 0;
+      for (const f of files) {
+        st.textContent = `Wysyłam ${k + 1} z ${files.length}…`;
+        try {
+          const blob = await shrink(f); const bmp = await createImageBitmap(blob).catch(() => null);
+          const ar = bmp ? bmp.height / bmp.width : 0.75; const r = await assets.upload(blob);
+          const w = ar > 1.2 ? 0.28 : 0.4, it = {id: r.id, x: Math.min(1 - w, 0.04 + (k % 5) * 0.06), y: top + 0.04 + (k % 5) * 0.05, w, ar: +ar.toFixed(4),
+            z: Math.max(0, ...B.items.map(x => x.z || 0)) + 1, author: author || undefined, by: uid || undefined};
+          B.items.push(it); B.h = Math.max(B.h, it.y + w * ar + 0.03); sel = it.id; k++; draw();
+        } catch (err) { st.textContent = err.status === 507 ? "Na serwerze skończyło się miejsce — zdjęcie nie zostało zapisane." : err.status === 415 ? "To nie jest zdjęcie JPG, PNG, WebP ani GIF: " + f.name : "Nie udało się wysłać: " + f.name; }
+      }
+      if (k) save();
+    });
+    let closing = false;
+    const close = async () => { if (closing) return; closing = true;
+      document.removeEventListener("keydown", keys); removeEventListener("resize", draw);
+      await (saveT ? flush() : saving); el.remove(); document.body.classList.remove("bed-open"); boardEditing = null; rerender(true); };
+    el.querySelector("#bed-x").addEventListener("click", close);
+    addEventListener("resize", draw); draw();
+  };
 
   // ---- framing photos directly on the slide (admin): drag = move, wheel/slider = zoom ----
   let crop = null;
@@ -1243,7 +1367,7 @@ KYVELI	49	209,4	7"></textarea>
   const readCol = col => new Promise(ok => { let done = false, un = null;
     un = db.collection(col).onSnapshot(sn => { if (done) return; done = true; ok(sn.docs.map(d => [col + "/" + d.id, d.data()])); try { un && un(); } catch (e) {} }, () => { if (!done) { done = true; ok([]); } }); });
   const buildBackup = async progress => {
-    const docs = Object.fromEntries((await Promise.all(["voyages", "meta", "site", "review", "submissions"].map(readCol))).flat());
+    const docs = Object.fromEntries((await Promise.all(["voyages", "meta", "site", "review", "submissions", "canvas"].map(readCol))).flat());
     const ids = new Set();
     for (const [k, d] of Object.entries(docs)) { if (k.startsWith("meta/")) { Object.values(d.slides || {}).forEach(c => (c.photos || []).forEach(i => ids.add(i)));
         Object.values(d.photos || {}).flat().forEach(i => ids.add(i)); if (d.cover) ids.add(d.cover); }
@@ -1252,6 +1376,9 @@ KYVELI	49	209,4	7"></textarea>
     for (const id of ids) { try { const r = await fetch(urlOf(id)); if (!r.ok) continue; const u = new Uint8Array(await r.arrayBuffer()); let bin = "";
         for (let i = 0; i < u.length; i += 32768) bin += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); blobs[id] = btoa(bin); progress(++n + " / " + ids.size); } catch (e) {} }
     return JSON.stringify({format: "akz-backup", from: "claude.ai", at: new Date().toISOString(), docs, blobs}); };
+  const renderOpen = () => { const el = $("#op-s"); if (!el) return;
+    el.innerHTML = openNow() ? `<b class="ok">Włączony do ${new Date(OPEN_UNTIL).toLocaleString("pl", {dateStyle: "long", timeStyle: "short"})}.</b> Każdy odwiedzający może dodawać zdjęcia i od razu układać je na slajdach, bez akceptacji. Wyłączy się sam.`
+      : "Wyłączony. Zdjęcia od odwiedzających trafiają do kolejki i czekają na wybór administratora. Włącz na czas wydarzenia, np. prezentacji, żeby wszyscy mogli od razu dodawać i układać zdjęcia."; };
   let subsOn = false;
   const startSubs = () => { if (subsOn || !db) return; subsOn = true;
     db.collection("submissions").onSnapshot(sn => { SUBS = sn.docs.flatMap(x => (x.data().items || []).map(it => ({...it, by: x.id}))); if (mode === "admin") renderQueue(); }, () => {}); };
@@ -1275,6 +1402,10 @@ KYVELI	49	209,4	7"></textarea>
     else if (adminOn() && (mode === "archive" || mode === "home" || mode === "series")) rerender();
     if (!db) return;
     db.doc("site/texts").onSnapshot(sn => { TEXTS = sn.exists ? sn.data() : {}; if (mode === "home" || mode === "series") routeTo(); }, () => {});
+    db.collection("canvas").onSnapshot(sn => { CANVAS = {}; sn.docs.forEach(x => { CANVAS[x.id] = x.data(); });
+      if (mode === "archive" && !boardEditing && !crop && modal.hidden) rerender(true); }, () => {});
+    db.doc("site/open").onSnapshot(sn => { OPEN_UNTIL = sn.exists ? sn.data().until || null : null;
+      if (mode === "archive" && !boardEditing && !crop && modal.hidden) rerender(true); if (mode === "admin") renderOpen(); }, () => {});
     db.doc("review/state").onSnapshot(sn => { REJECTED = sn.exists ? sn.data().rejected || [] : []; if (mode === "admin") renderQueue(); }, () => {});
     if (canEditor) startSubs();
     let first = true;

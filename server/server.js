@@ -92,7 +92,14 @@ const ctxOf = (req, res) => {
 const canRead = (p, c) => { const [col, id] = p.split("/");
   if (col === "config") return c.admin; if (col === "submissions") return c.admin || id === c.uid; return true; };
 const canList = (col, c) => (col === "config" || col === "submissions") ? c.admin : true;
-const canWrite = (p, c) => c.admin || p === "submissions/" + c.uid;
+// a slide board: {h, items: [{id, x, y, w, ar, z, rot, author, by}]}, photos must exist on the server
+const validBoard = d => typeof d.h === "number" && d.h > 0 && d.h <= 8 && Array.isArray(d.items) && d.items.length <= 80 &&
+  d.items.every(it => it && /^[a-f0-9]{32}$/.test(it.id) && fs.existsSync(path.join(BLOBS, it.id)) &&
+    ["x", "y", "w", "ar"].every(k => typeof it[k] === "number" && isFinite(it[k])) && it.w > 0 && it.w <= 1.5 &&
+    (it.author == null || (typeof it.author === "string" && it.author.length <= 80)));
+// open mode (site/open {until}, set by admins): anyone may add and arrange photos on the slide boards
+const openNow = () => { const u = (DB["site/open"] || {}).until; return !!u && Date.parse(u) > Date.now(); };
+const canWrite = (p, c, method) => c.admin || p === "submissions/" + c.uid || (method === "PUT" && p.startsWith("canvas/") && openNow());
 
 // ---------- http helpers ----------
 const CSP = "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://server.arcgisonline.com; connect-src 'self' https://server.arcgisonline.com";
@@ -200,8 +207,10 @@ const server = http.createServer(async (req, res) => {
 
     if (P === "/api/doc") { const p = url.searchParams.get("path"); if (!validDoc(p)) return send(res, 400, {error: "path"});
       if (M === "GET") { if (!canRead(p, c)) return send(res, 403, {error: "permission_denied"}); return send(res, 200, {exists: p in DB, data: DB[p] ?? null}); }
-      if (!canWrite(p, c)) return send(res, 403, {error: "permission_denied"});
+      if (!canWrite(p, c, M)) return send(res, 403, {error: openNow() || !p.startsWith("canvas/") ? "permission_denied" : "open_mode_ended"});
+      if (!c.admin && p.startsWith("canvas/") && limited("canvas:" + c.ip, 600, 3600e3)) return send(res, 429, {error: "too_many"});
       if (M === "PUT") { const d = await readJson(req, c.admin ? 2097152 : 262144); if (!d || typeof d !== "object" || Array.isArray(d)) return send(res, 400, {error: "data"});
+        if (p.startsWith("canvas/") && !validBoard(d)) return send(res, 400, {error: "board"});
         const had = p in DB, prev = DB[p]; DB[p] = d;
         try { await save(); } catch (e) { if (had) DB[p] = prev; else delete DB[p]; throw e.status ? e : DISK_FULL; }
         broadcast(p); return send(res, 200, {}); }

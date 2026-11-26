@@ -480,6 +480,8 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
     map.getSource("plan").setData({type: "FeatureCollection", features: parts(S).map(c => ({type: "Feature", geometry: {type: "LineString", coordinates: c}}))});
     map.getSource("others").setData(present ? empty : othersData(VOY.filter(v => !Vs.includes(v))));
     setPorts(portsOf(Vs), anchorsOf(Vs)); if (S.all.length > 1) { boat.addTo(map); paint(0); } scrollTo(0, 0);
+    if (pendingSlide) { const key = pendingSlide; pendingSlide = null; requestAnimationFrame(() => { const i = secs.findIndex(x => x.dataset.key === key);
+      if (i >= 0) { go(i); secs[i].scrollIntoView({block: "start"}); secs[i].classList.add("flash"); setTimeout(() => secs[i] && secs[i].classList.remove("flash"), 2600); } }); }
     io = new IntersectionObserver(es => { if (lock) return; es.forEach(e => { if (e.isIntersecting) go(secs.indexOf(e.target)); }); }, {rootMargin: "-58% 0px -40% 0px"});
     secs.forEach(s => io.observe(s)); go(0);
   };
@@ -588,7 +590,9 @@ new Promise((res, rej) => { if (window.SEED && window.BASE && window.maplibregl)
   const showAdmin = () => {
     mode = "admin"; stopStory(); navMode("admin"); homebtn.textContent = "← Strona główna"; homebtn.dataset.to = "";
     stepsEl.innerHTML = `<section class="step admin">
-      <div class="kick">Panel administratora</div><h1>Dodaj rejsy</h1>
+      <div class="kick">Panel administratora</div>
+      <div id="a-news" class="news" aria-live="polite"></div>
+      <h1>Dodaj rejsy</h1>
       ${db ? "" : `<p class="warn">Baza danych jest niedostępna — zapis nie zadziała.${SELF ? " Sprawdź, czy serwer działa." : " Otwórz stronę w Claude jako edytor."}</p>`}
       <form id="af" class="form" novalidate>
         <label class="f2">Wklej wiersze z arkusza
@@ -655,7 +659,7 @@ KYVELI	49	209,4	7"></textarea>
         catch (e) { st.textContent = "Przeglądarka nie pozwoliła skopiować — spróbuj ponownie."; } }); }
     map.getSource("others").setData(othersData(VOY)); setPorts([], []);
     $("#af").addEventListener("submit", e => { e.preventDefault(); preview(); });
-    renderList(); renderQueue(); renderAccounts(); scrollTo(0, 0);
+    renderList(); renderQueue(); renderAccounts(); renderNews(); scrollTo(0, 0);
   };
   const openSlide = (vid, key) => { location.hash = vid;
     setTimeout(() => { const V = VOY.find(v => v.id === vid), i = steps.findIndex(x => x.key === key); if (!V || i < 0) return;
@@ -941,7 +945,7 @@ KYVELI	49	209,4	7"></textarea>
   const syncMenu = () => { const on = adminOn();
     $("#m-login").hidden = on; $("#m-admin").hidden = !on; $("#m-edit").hidden = !on; $("#m-logout").hidden = !on;
     $("#m-edit").firstChild.textContent = editMode ? "Tryb edycji: włączony" : "Tryb edycji: wyłączony";
-    isAdmin = on; };
+    isAdmin = on; if (typeof syncBadge === "function") try { syncBadge(); } catch (e) {} };
   $("#m-login").addEventListener("click", () => { setMenu(false); openLogin(); });
   $("#m-logout").addEventListener("click", () => { setMenu(false); if (SELF) { window.claude.logout(); canEditor = false; } setSession(null); if (mode === "admin") location.hash = ""; else rerender(); });
   $("#m-edit").addEventListener("click", () => { editMode = !editMode; try { sessionStorage.setItem("akz-edit", editMode ? "1" : "0"); } catch (e) {} syncMenu(); setMenu(false); rerender(); });
@@ -1078,7 +1082,8 @@ KYVELI	49	209,4	7"></textarea>
   };
   const keyLabel = (V, key) => { const p = key.split(":");
     if (key === "hero") return "strona tytułowa"; if (key === "log") return "dziennik";
-    if (p[0] === "leg") return `rejs ${+p[1] + 1}`; if (p[0] === "boats") return `rejs ${+p[1] + 1} · jachty`;
+    const legName = i => { const st = (V.legs[i] || {}).stops || []; return `rejs ${i + 1}` + (st.length ? ` · ${st[0]}${st.length > 1 ? " – " + st[st.length - 1] : ""}` : ""); };
+    if (p[0] === "leg") return legName(+p[1]); if (p[0] === "boats") return legName(+p[1]) + " · jachty";
     if (p[0] === "hop") { const h = V.legs[+p[1]].routes[0].hops[+p[2]]; return `rejs ${+p[1] + 1} · ${h ? h.from + " → " + h.to : ""}`; } return key; };
   const openEditor = (V, key) => {
     const p = key.split(":"), li = +p[1], L = V.legs[li];
@@ -1258,7 +1263,7 @@ KYVELI	49	209,4	7"></textarea>
         try {
           const blob = await shrink(f); const bmp = await createImageBitmap(blob).catch(() => null);
           const ar = bmp ? bmp.height / bmp.width : 0.75; const r = await assets.upload(blob);
-          const w = ar > 1.2 ? 0.28 : 0.4, it = {id: r.id, x: Math.min(1 - w, 0.04 + (k % 5) * 0.06), y: top + 0.04 + (k % 5) * 0.05, w, ar: +ar.toFixed(4),
+          const w = ar > 1.2 ? 0.28 : 0.4, it = {id: r.id, t: new Date().toISOString(), x: Math.min(1 - w, 0.04 + (k % 5) * 0.06), y: top + 0.04 + (k % 5) * 0.05, w, ar: +ar.toFixed(4),
             z: Math.max(0, ...B.items.map(x => x.z || 0)) + 1, author: author || undefined, by: uid || undefined};
           B.items.push(it); B.h = Math.max(B.h, it.y + w * ar + 0.03); sel = it.id; k++; draw();
         } catch (err) { st.textContent = err.status === 507 ? "Na serwerze skończyło się miejsce — zdjęcie nie zostało zapisane." : err.status === 415 ? "To nie jest zdjęcie JPG, PNG, WebP ani GIF: " + f.name : "Nie udało się wysłać: " + f.name; }
@@ -1376,12 +1381,52 @@ KYVELI	49	209,4	7"></textarea>
     for (const id of ids) { try { const r = await fetch(urlOf(id)); if (!r.ok) continue; const u = new Uint8Array(await r.arrayBuffer()); let bin = "";
         for (let i = 0; i < u.length; i += 32768) bin += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); blobs[id] = btoa(bin); progress(++n + " / " + ids.size); } catch (e) {} }
     return JSON.stringify({format: "akz-backup", from: "claude.ai", at: new Date().toISOString(), docs, blobs}); };
+  // ---- what visitors and admins uploaded, and where: review-queue uploads and photos placed on slide boards ----
+  let pendingSlide = null;
+  const showSlide = (vid, key) => { pendingSlide = key; if (location.hash === "#" + vid) routeTo(); else location.hash = vid; };
+  const seenAt = () => { try { return localStorage.getItem("akz-seen") || ""; } catch (e) { return ""; } };
+  const keyOfBoard = bid => { const i = bid.indexOf("__"); return [bid.slice(0, i), bid.slice(i + 2).replace(/-/g, ":")]; };
+  const activity = () => {
+    const ev = [], inQueue = new Set(SUBS.map(x => x.id));
+    for (const x of SUBS) ev.push({t: x.ts || "", v: x.v, key: x.key, who: x.author || "", id: x.id, kind: "queue",
+      state: REJECTED.includes(x.id) ? "odrzucone" : VOY.some(V => V.id === x.v && usedPhotos(V).has(x.id)) ? "wybrane" : "czeka na wybór"});
+    for (const [bid, b] of Object.entries(CANVAS)) { const [v, key] = keyOfBoard(bid);
+      for (const it of b.items || []) if (!inQueue.has(it.id)) ev.push({t: it.t || b.updated || "", v, key, who: it.author || "", id: it.id, kind: "board", state: "na slajdzie"}); }
+    // one entry per person, slide and kind within half an hour
+    ev.sort((a, b) => b.t.localeCompare(a.t));
+    const groups = [];
+    for (const e of ev) { const g = groups.find(g => g.v === e.v && g.key === e.key && g.who === e.who && g.kind === e.kind && Math.abs(Date.parse(g.t0) - Date.parse(e.t)) < 1800e3);
+      if (g) { g.items.push(e); g.t0 = e.t; } else groups.push({...e, t0: e.t, items: [e]}); }
+    return groups;
+  };
+  const newCount = () => { const s = seenAt(); return activity().reduce((n, g) => n + g.items.filter(e => e.t > s).length, 0); };
+  const syncBadge = () => { let b = menubtn.querySelector(".badge"); const n = adminOn() ? newCount() : 0;
+    if (!n) { if (b) b.remove(); return; }
+    if (!b) { b = document.createElement("span"); b.className = "badge"; menubtn.appendChild(b); }
+    b.textContent = n > 99 ? "99+" : n; menubtn.setAttribute("aria-label", `Menu — ${n} ${plural(n, "nowe zdjęcie", "nowe zdjęcia", "nowych zdjęć")}`); };
+  const renderNews = () => { syncBadge(); const el = $("#a-news"); if (!el) return;
+    const seen = seenAt(), all = activity(), fresh = all.filter(g => g.items.some(e => e.t > seen));
+    const n = fresh.reduce((k, g) => k + g.items.filter(e => e.t > seen).length, 0), slides = new Set(fresh.map(g => g.v + g.key)).size;
+    const when = t => t ? new Date(t).toLocaleString("pl", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "";
+    const row = g => { const V = VOY.find(x => x.id === g.v), isNew = g.items.some(e => e.t > seen);
+      return `<li class="${isNew ? "new" : ""}"><div class="nthumbs">${g.items.slice(0, 4).map(e => `<img src="/_blob/${esc(e.id)}" alt="" loading="lazy">`).join("")}</div>
+        <div class="ntxt"><b>${g.items.length} ${plural(g.items.length, "zdjęcie", "zdjęcia", "zdjęć")}</b> · ${g.who ? "fot. " + esc(g.who) : "bez autora"}
+          <span>${V ? esc(vt(V)) + " · " + esc(keyLabel(V, g.key)) : "wyprawa usunięta"}</span>
+          <small>${when(g.t)} · ${g.kind === "board" ? "ułożone od razu na slajdzie (tryb otwarty)" : g.state}</small></div>
+        ${V ? `<button type="button" class="btn ghost sm" data-show="${esc(g.v)}|${esc(g.key)}">Pokaż</button>` : ""}</li>`; };
+    el.innerHTML = !all.length ? "" : `<div class="nhead">${n ? `<b>Nowe od ostatniej wizyty: ${n} ${plural(n, "zdjęcie", "zdjęcia", "zdjęć")} na ${slides} ${plural(slides, "slajdzie", "slajdach", "slajdach")}</b>
+        <button type="button" class="btn ghost sm" id="n-seen">Oznacz jako przejrzane</button>` : `<span>Brak nowych zdjęć od ostatniej wizyty.</span>`}</div>
+      <ul class="nlist">${(n ? fresh : all.slice(0, 5)).slice(0, 30).map(row).join("")}</ul>
+      ${!n && all.length > 5 ? `<details><summary>Starsze (${all.length - 5})</summary><ul class="nlist">${all.slice(5, 60).map(row).join("")}</ul></details>` : ""}`;
+    const ms = el.querySelector("#n-seen"); if (ms) ms.addEventListener("click", () => { try { localStorage.setItem("akz-seen", new Date().toISOString()); } catch (e) {} renderNews(); });
+    el.querySelectorAll("[data-show]").forEach(b => b.addEventListener("click", () => { const [v, k] = b.dataset.show.split("|"); showSlide(v, k); }));
+  };
   const renderOpen = () => { const el = $("#op-s"); if (!el) return;
     el.innerHTML = openNow() ? `<b class="ok">Włączony do ${new Date(OPEN_UNTIL).toLocaleString("pl", {dateStyle: "long", timeStyle: "short"})}.</b> Każdy odwiedzający może dodawać zdjęcia i od razu układać je na slajdach, bez akceptacji. Wyłączy się sam.`
       : "Wyłączony. Zdjęcia od odwiedzających trafiają do kolejki i czekają na wybór administratora. Włącz na czas wydarzenia, np. prezentacji, żeby wszyscy mogli od razu dodawać i układać zdjęcia."; };
   let subsOn = false;
   const startSubs = () => { if (subsOn || !db) return; subsOn = true;
-    db.collection("submissions").onSnapshot(sn => { SUBS = sn.docs.flatMap(x => (x.data().items || []).map(it => ({...it, by: x.id}))); if (mode === "admin") renderQueue(); }, () => {}); };
+    db.collection("submissions").onSnapshot(sn => { SUBS = sn.docs.flatMap(x => (x.data().items || []).map(it => ({...it, by: x.id}))); if (mode === "admin") { renderQueue(); renderNews(); } else syncBadge(); }, () => {}); };
   // saved data arrived or changed: redraw what is on screen (an open voyage keeps its slide; a running presentation only on first load)
   let seenData = 0;
   const refresh = () => { rebuild(); seenData++;
@@ -1402,7 +1447,7 @@ KYVELI	49	209,4	7"></textarea>
     else if (adminOn() && (mode === "archive" || mode === "home" || mode === "series")) rerender();
     if (!db) return;
     db.doc("site/texts").onSnapshot(sn => { TEXTS = sn.exists ? sn.data() : {}; if (mode === "home" || mode === "series") routeTo(); }, () => {});
-    db.collection("canvas").onSnapshot(sn => { CANVAS = {}; sn.docs.forEach(x => { CANVAS[x.id] = x.data(); });
+    db.collection("canvas").onSnapshot(sn => { CANVAS = {}; sn.docs.forEach(x => { CANVAS[x.id] = x.data(); }); if (mode === "admin") renderNews(); else syncBadge();
       if (mode === "archive" && !boardEditing && !crop && modal.hidden) rerender(true); }, () => {});
     db.doc("site/open").onSnapshot(sn => { OPEN_UNTIL = sn.exists ? sn.data().until || null : null;
       if (mode === "archive" && !boardEditing && !crop && modal.hidden) rerender(true); if (mode === "admin") renderOpen(); }, () => {});
